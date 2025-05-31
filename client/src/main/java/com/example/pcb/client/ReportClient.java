@@ -15,7 +15,7 @@ public class ReportClient {
         for(String t: new String[]{"TEST","SENSOR","GATEWAY"}){
             String json = fetch(t);
             Map<String,Object> data = JsonUtil.parse(json);
-            ReportFormatter.print(data);
+            System.out.println(ReportFormatter.format(data));
             System.out.println("\n-------------------------------\n");
         }
     }
