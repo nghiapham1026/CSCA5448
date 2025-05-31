@@ -1,64 +1,113 @@
-// SimulationServer.java (REST server using JDK `HttpServer`)
-
 package com.example.pcb.server;
 
-import com.sun.net.httpserver.*; // JDK‑built‑in minimal HTTP server
-import java.io.IOException;
-import java.io.OutputStream;
-import java.net.InetSocketAddress;
-import java.util.EnumMap;
-import java.util.Map;
+import com.example.pcb.server.persistence.*;
+import com.sun.net.httpserver.*;
 
-/** Simulation server that runs 3 simulations on start‑up then exposes the
- *  results via a simple REST endpoint:  GET /results?type=TEST|SENSOR|GATEWAY */
+import java.io.*;
+import java.net.*;
+import java.util.*;
+
+/**
+ * Runs one 1 000-board simulation per PCB type, stores the JSON
+ * result in SQLite, then exposes them via
+ *
+ *   GET /results?type=TEST|SENSOR|GATEWAY
+ *
+ * Patterns kept intact:
+ *   • Strategy  – PCBType hierarchy
+ *   • Factory   – PCBFactory
+ *   • DI        – Simulation receives PCBType in its constructor
+ */
 public class SimulationServer {
-    private static final int PORT = 8000;
-    private static final Map<PCBFactory.Type,Result> cache = new EnumMap<>(PCBFactory.Type.class);
 
-    public static void main(String[] args) throws IOException {
-        runSimulations();
-        startHttp();
+    private static final int PORT = 8000;
+    private static ResultStore store;
+
+    public static void main(String[] args) throws Exception {
+        /* Choose persistence backend (SQLite here, Redis later if desired). */
+        store = new SQLiteResultStore();
+
+        /* Graceful shutdown – close DB connection. */
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try { store.close(); } catch (Exception ignored) {}
+        }));
+
+        runSimulations();   // generates and stores JSON for all board types
+        startHttp();        // exposes REST endpoint
     }
 
-    private static void runSimulations(){
-        for(PCBFactory.Type t: PCBFactory.Type.values()){
-            PCBType board = PCBFactory.create(t); // Strategy object produced by Factory
-            Simulation sim = new Simulation(board); // DI here
-            Result res = sim.run(1000);
-            cache.put(t,res);
-            System.out.println("[Server] Finished " + board.getName());
+    /** Executes simulations and writes each JSON payload to the DB. */
+    private static void runSimulations() throws Exception {
+        for (PCBFactory.Type t : PCBFactory.Type.values()) {
+            PCBType board   = PCBFactory.create(t);     // Factory → Strategy
+            Simulation sim  = new Simulation(board);    // DI in action
+            String json     = JsonUtil.toJson(sim.run(1000));
+
+            store.save(t, json);
+
+            System.out.printf("[Server] Stored %s result in DB%n", board.getName());
         }
     }
 
+    /** Minimal JDK-HttpServer wrapper. */
     private static void startHttp() throws IOException {
-        HttpServer server = HttpServer.create(new InetSocketAddress(PORT),0);
-        server.createContext("/results", SimulationServer::handleResults);
-        server.setExecutor(null);
-        server.start();
-        System.out.println("Simulation server listening on http://localhost:"+PORT+"/results");
+        HttpServer s = HttpServer.create(new InetSocketAddress(PORT), 0);
+        s.createContext("/results", SimulationServer::handleResults);
+        s.setExecutor(null);
+        s.start();
+        System.out.println("HTTP endpoint ready at http://localhost:" + PORT + "/results");
     }
 
     private static void handleResults(HttpExchange ex) throws IOException {
-        String query = ex.getRequestURI().getQuery();
-        String typeParam = null;
-        if(query!=null){
-            for(String p: query.split("&")){
-                if(p.startsWith("type=")){ typeParam = p.substring(5).toUpperCase(); }
-            }
-        }
-        PCBFactory.Type type=null;
-        try{ type = PCBFactory.Type.valueOf(typeParam); }catch(Exception ignored){}
+        Map<String, String> qp = queryParams(ex.getRequestURI().getQuery());
+        String typeStr = qp.getOrDefault("type", "").toUpperCase();
+
+        PCBFactory.Type type = null;
+        try { type = PCBFactory.Type.valueOf(typeStr); } catch (Exception ignored) {}
+
         String body;
         int code;
-        if(type==null){
-            body = "{\"error\":\"missing or invalid type parameter\"}";
-            code = 400;
-        }else{
-            body = JsonUtil.toJson(cache.get(type));
-            code = 200;
+
+        try {
+            if (type == null) {
+                body = "{\"error\":\"missing or invalid type parameter\"}";
+                code = 400;
+            } else {
+                body = store.load(type);
+                if (body == null) {
+                    body = "{\"error\":\"no data for " + type + "\"}";
+                    code = 404;
+                } else {
+                    code = 200;
+                }
+            }
+        } catch (Exception e) {
+            body = "{\"error\":\"server exception: " + e.getMessage() + "\"}";
+            code = 500;
         }
-        ex.getResponseHeaders().add("Content-Type","application/json");
+
+        ex.getResponseHeaders().add("Content-Type", "application/json");
         ex.sendResponseHeaders(code, body.getBytes().length);
-        try(OutputStream os = ex.getResponseBody()){ os.write(body.getBytes()); }
+        try (OutputStream os = ex.getResponseBody()) {
+            os.write(body.getBytes());
+        }
+    }
+
+    /* ---------- tiny helpers ---------- */
+
+    private static Map<String, String> queryParams(String q) {
+        Map<String, String> m = new HashMap<>();
+        if (q == null || q.isEmpty()) return m;
+
+        for (String p : q.split("&")) {
+            int eq = p.indexOf('=');
+            if (eq > 0) {
+                m.put(
+                    URLDecoder.decode(p.substring(0, eq), java.nio.charset.StandardCharsets.UTF_8),
+                    URLDecoder.decode(p.substring(eq + 1), java.nio.charset.StandardCharsets.UTF_8)
+                );
+            }
+        }
+        return m;
     }
 }
