@@ -1,38 +1,47 @@
-// ReportFormatter.java
-
 package com.example.pcb.client;
 
 import java.util.*;
 
+/** Formats the JSON result map into the text table shown in the spec. */
 public class ReportFormatter {
-    public static void print(Map<String,Object> data){
-        System.out.println("PCB type:    " + stripQuotes(data.get("pcbType")));
-        System.out.println("PCBs run:    " + data.get("pcbsRun"));
-        System.out.println();
 
-        System.out.println("Station Failures");
-        printSection((String)data.get("stationFailures"));
-        System.out.println();
-        System.out.println("PCB Defect Failures");
-        printSection((String)data.get("pcbDefectFailures"));
-        System.out.println();
-        System.out.println("Final Results");
-        System.out.printf("%-25s %s%n","Total failed PCBs:", data.get("totalFailed"));
-        System.out.printf("%-25s %s%n","Total PCBs produced:", data.get("totalProduced"));
+    public static String format(Map<String, Object> json) {
+        StringBuilder sb = new StringBuilder();
+
+        sb.append("\n=== ")
+          .append(json.get("pcbType"))
+          .append("  –  ")
+          .append(json.get("pcbsRun"))
+          .append(" boards ===\n");
+
+        addSection(sb, "Station failures",      (String) json.get("stationFailures"));
+        addSection(sb, "Defect-specific fails", (String) json.get("pcbDefectFailures"));
+
+        sb.append("\nTOTAL FAILED   : ").append(json.get("totalFailed"));
+        sb.append("\nTOTAL PRODUCED : ").append(json.get("totalProduced")).append('\n');
+
+        return sb.toString();
     }
 
-    private static void printSection(String jsonSection){
-        jsonSection = jsonSection.replaceAll("[{}]","");
-        String[] kv = jsonSection.split(",");
-        for(String pair: kv){
-            String[] p = pair.split(":");
-            String k = stripQuotes(p[0]);
-            String v = p[1];
-            System.out.printf("%-25s %s%n", k + ":", v);
+    /* ------------ helpers ------------ */
+
+    private static void addSection(StringBuilder sb, String title, String rawJson) {
+        sb.append('\n').append(title).append(":\n");
+        LinkedHashMap<String, Integer> map = toMap(rawJson);
+        map.forEach((k, v) ->
+            sb.append(String.format("  %-30s %5d%n", k, v)));
+    }
+
+    private static LinkedHashMap<String, Integer> toMap(String j) {
+        LinkedHashMap<String, Integer> map = new LinkedHashMap<>();
+        if (j == null || j.length() <= 2) return map; // "{}"
+        j = j.substring(1, j.length() - 1);           // strip {}
+        for (String kv : j.split(",")) {
+            int i = kv.indexOf(':');
+            String key = kv.substring(0, i).replace("\"", "");
+            int val = Integer.parseInt(kv.substring(i + 1));
+            map.put(key, val);
         }
-    }
-
-    private static String stripQuotes(Object s){
-        return String.valueOf(s).replace("\"",""");
+        return map;
     }
 }
