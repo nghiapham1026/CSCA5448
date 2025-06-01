@@ -40,12 +40,15 @@ public final class MainController implements AutoCloseable {
         else              CliViews.listRuns(lst);
     }
 
-    private void viewReport() throws Exception{
-        long id = CliViews.askRunId();
-        Result r = repo.findById(id);
-        if(r==null){ System.out.println("Run not found."); return; }
-        Map<String,Object> json = JsonParser.parse(JsonUtil.toJson(r));
-        CliViews.showReport(json);
+    private void viewReport() throws Exception {
+        long id   = CliViews.askRunId();
+        String js = repo.findById(id);          // now returns JSON directly
+        if (js == null) {
+            System.out.println("Run not found.");
+            return;
+        }
+        Map<String,Object> map = JsonParser.parse(js);
+        CliViews.showReport(map);
     }
 
     @Override public void close() throws Exception{ repo.close(); }
